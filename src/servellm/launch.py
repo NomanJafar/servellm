@@ -59,7 +59,7 @@ class StartupInfo:
 
 
 _PATTERNS = {
-    "attention_backend": (re.compile(r"Using (\S+) backend"), str),
+    "attention_backend": (re.compile(r"Using (\S+) (?:attention )?backend"), str),
     "model_load_gib": (re.compile(r"Model loading took ([\d.]+) GiB"), float),
     "model_load_seconds": (re.compile(r"Model loading took [\d.]+ GiB and ([\d.]+) seconds"), float),
     "kv_cache_gib": (re.compile(r"Available KV cache memory: ([\d.]+) GiB"), float),
