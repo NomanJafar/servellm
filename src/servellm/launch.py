@@ -8,6 +8,7 @@ summary of what a given model/GPU/config can serve.
 
 from __future__ import annotations
 
+import os
 import re
 import subprocess
 import time
@@ -80,15 +81,17 @@ def parse_startup_log(text: str) -> StartupInfo:
 class VllmServer:
     """Runs `vllm serve` as a subprocess, tees its log to a file, waits for /health."""
 
-    def __init__(self, cfg: ServerConfig, log_path: Path | str = "results/startup.log"):
+    def __init__(self, cfg: ServerConfig, log_path: Path | str = "results/startup.log", env: dict | None = None):
         self.cfg = cfg
         self.log_path = Path(log_path)
+        self.env = env or {}          # per-process overrides, e.g. CUDA_VISIBLE_DEVICES for one replica per GPU
         self.proc: subprocess.Popen | None = None
 
     def start(self, ready_timeout_s: float = 600) -> StartupInfo:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = self.log_path.open("w")
-        self.proc = subprocess.Popen(build_command(self.cfg), stdout=log_file, stderr=subprocess.STDOUT)
+        self.proc = subprocess.Popen(build_command(self.cfg), stdout=log_file, stderr=subprocess.STDOUT,
+                                     env={**os.environ, **self.env})
         self._wait_ready(ready_timeout_s)
         return parse_startup_log(self.log_path.read_text())
 

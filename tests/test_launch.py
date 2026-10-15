@@ -54,3 +54,27 @@ def test_parse_startup_log_tolerates_missing_lines():
 
 def test_parse_startup_log_accepts_older_backend_wording():
     assert parse_startup_log("INFO [cuda.py:180] Using FLEX_ATTENTION backend.\n").attention_backend == "FLEX_ATTENTION"
+
+
+def test_server_env_is_merged_into_the_process_environment(monkeypatch, tmp_path):
+    # Two replicas on two GPUs need different CUDA_VISIBLE_DEVICES; the env must be captured
+    # per server at spawn time, not read from os.environ when start() happens to run.
+    import subprocess
+
+    from servellm.launch import VllmServer
+
+    seen = {}
+
+    class FakeProc:
+        def poll(self):
+            return None
+
+    def fake_popen(cmd, stdout=None, stderr=None, env=None):
+        seen["env"] = env
+        return FakeProc()
+
+    monkeypatch.setattr(subprocess, "Popen", fake_popen)
+    monkeypatch.setattr(VllmServer, "_wait_ready", lambda self, t: None)
+    s = VllmServer(ServerConfig(model="m"), log_path=tmp_path / "s.log", env={"CUDA_VISIBLE_DEVICES": "1"})
+    s.start()
+    assert seen["env"]["CUDA_VISIBLE_DEVICES"] == "1" and "PATH" in seen["env"]
