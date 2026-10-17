@@ -69,7 +69,7 @@ def test_server_env_is_merged_into_the_process_environment(monkeypatch, tmp_path
         def poll(self):
             return None
 
-    def fake_popen(cmd, stdout=None, stderr=None, env=None):
+    def fake_popen(cmd, stdout=None, stderr=None, env=None, **kw):
         seen["env"] = env
         return FakeProc()
 
@@ -78,3 +78,39 @@ def test_server_env_is_merged_into_the_process_environment(monkeypatch, tmp_path
     s = VllmServer(ServerConfig(model="m"), log_path=tmp_path / "s.log", env={"CUDA_VISIBLE_DEVICES": "1"})
     s.start()
     assert seen["env"]["CUDA_VISIBLE_DEVICES"] == "1" and "PATH" in seen["env"]
+
+
+def test_kill_takes_the_whole_process_group_down(monkeypatch, tmp_path):
+    """vLLM's API server forks an EngineCore child that owns the GPU memory. SIGKILL on the parent alone
+    leaves that child alive (inferchaos run 3: the restarted server found 1.6 of 14.6 GiB free)."""
+    import os
+    import signal
+    import time
+
+    import servellm.launch as launch
+    from servellm.launch import VllmServer
+
+    # a parent that forks a child, then idles: the shape of `vllm serve`
+    monkeypatch.setattr(launch, "build_command", lambda cfg: ["bash", "-c", "sleep 300 & echo $! > child.pid; wait"])
+    monkeypatch.setattr(VllmServer, "_wait_ready", lambda self, t: None)
+    monkeypatch.chdir(tmp_path)
+    s = VllmServer(ServerConfig(model="m"), log_path=tmp_path / "s.log")
+    s.start()
+    for _ in range(100):
+        if (tmp_path / "child.pid").exists() and (tmp_path / "child.pid").read_text().strip():
+            break
+        time.sleep(0.02)
+    child = int((tmp_path / "child.pid").read_text())
+    os.kill(child, 0)                       # alive
+    s.kill()
+    assert s.proc.poll() is not None
+    time.sleep(0.2)
+    try:
+        os.kill(child, 0)
+        alive = True
+    except ProcessLookupError:
+        alive = False
+    if alive:                               # a zombie still answers signal 0; make sure it is at least not running
+        state = open(f"/proc/{child}/stat").read().split()[2] if os.path.exists(f"/proc/{child}/stat") else "?"
+        assert state in ("Z", "?"), f"child {child} still running (state {state})"
+    assert signal.SIGKILL  # keep the import honest

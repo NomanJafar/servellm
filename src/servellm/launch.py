@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import os
 import re
+import signal
 import subprocess
 import time
 from dataclasses import dataclass, field
@@ -90,8 +91,9 @@ class VllmServer:
     def start(self, ready_timeout_s: float = 600) -> StartupInfo:
         self.log_path.parent.mkdir(parents=True, exist_ok=True)
         log_file = self.log_path.open("w")
+        # own session: vLLM forks an EngineCore that holds the GPU memory, and kill()/stop() must reach it too
         self.proc = subprocess.Popen(build_command(self.cfg), stdout=log_file, stderr=subprocess.STDOUT,
-                                     env={**os.environ, **self.env})
+                                     env={**os.environ, **self.env}, start_new_session=True)
         self._wait_ready(ready_timeout_s)
         return parse_startup_log(self.log_path.read_text())
 
@@ -108,13 +110,34 @@ class VllmServer:
             time.sleep(2)
         raise TimeoutError(f"vLLM not ready after {timeout_s}s; see {self.log_path}")
 
+    def _killpg(self, sig: int) -> None:
+        if self.proc is None:
+            return
+        try:
+            os.killpg(os.getpgid(self.proc.pid), sig)
+        except ProcessLookupError:
+            pass
+
     def stop(self) -> None:
+        """Graceful shutdown (SIGTERM, 30 s), then SIGKILL for anything left in the server's process group."""
         if self.proc and self.proc.poll() is None:
             self.proc.terminate()
             try:
                 self.proc.wait(timeout=30)
             except subprocess.TimeoutExpired:
-                self.proc.kill()
+                pass
+        self._killpg(signal.SIGKILL)
+        if self.proc and self.proc.poll() is None:
+            self.proc.wait(timeout=30)
+
+    def kill(self) -> None:
+        """Abrupt death of the whole server, children included: what a node failure or OOM-kill looks like.
+
+        SIGKILL on the `vllm serve` process alone leaves its EngineCore child alive and holding the GPU
+        memory, so a restart on the same GPU fails (inferchaos run 3)."""
+        self._killpg(signal.SIGKILL)
+        if self.proc and self.proc.poll() is None:
+            self.proc.wait(timeout=30)
 
     def __enter__(self) -> Self:
         self.start()
