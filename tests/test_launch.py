@@ -111,6 +111,9 @@ def test_kill_takes_the_whole_process_group_down(monkeypatch, tmp_path):
     except ProcessLookupError:
         alive = False
     if alive:                               # a zombie still answers signal 0; make sure it is at least not running
-        state = open(f"/proc/{child}/stat").read().split()[2] if os.path.exists(f"/proc/{child}/stat") else "?"
+        from pathlib import Path
+
+        stat = Path(f"/proc/{child}/stat")
+        state = stat.read_text().split()[2] if stat.exists() else "?"
         assert state in ("Z", "?"), f"child {child} still running (state {state})"
     assert signal.SIGKILL  # keep the import honest
