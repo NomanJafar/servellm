@@ -87,7 +87,7 @@ def test_kill_takes_the_whole_process_group_down(monkeypatch, tmp_path):
     import signal
     import time
 
-    import servellm.launch as launch
+    from servellm import launch
     from servellm.launch import VllmServer
 
     # a parent that forks a child, then idles: the shape of `vllm serve`
